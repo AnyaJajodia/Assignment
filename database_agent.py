@@ -690,6 +690,68 @@ Definition: {rule.get('definition', '')}
         if hasattr(self, 'conn') and self.conn:
             self.conn.close()
 
+def is_sql_query(text: str, llm_call=None) -> bool:
+    """
+    Return True if `text` looks like an SQL statement, else False.
+    If `llm_call` is provided, it should be a function: (prompt:str) -> str (LLM text response).
+    Falls back to a local heuristic if LLM call fails or is not provided.
+    """
+    prompt = f"""Determine if the following input is an SQL statement.
+Consider that valid SQL may have leading comments (-- or /* */) and whitespace.
+
+Input:
+\"\"\"{text}\"\"\"
+
+Respond ONLY in JSON:
+{{"is_sql_query": true/false}}
+"""
+
+    # Try LLM if provided
+    if llm_call is not None:
+        try:
+            content = llm_call(prompt)  # should return raw text
+            m = re.search(r'\{.*\}', content, re.DOTALL)
+            if m:
+                parsed = json.loads(m.group())
+                is_bool = parsed.get("is_sql_query")
+                if isinstance(is_bool, bool):
+                    return is_bool
+        except Exception:
+            pass
+
+    # Fallback: local heuristic
+    def _strip_leading_comments(txt: str) -> str:
+        txt = txt.lstrip()
+        while True:
+            s = txt.lstrip()
+            if s.startswith("--"):
+                nl = s.find("\n")
+                txt = s[nl+1:] if nl != -1 else ""
+                continue
+            if s.startswith("/*"):
+                end = s.find("*/")
+                txt = s[end+2:] if end != -1 else ""
+                continue
+            # remove blank leading lines
+            lines = s.splitlines()
+            while lines and not lines[0].strip():
+                lines.pop(0)
+            return ("\n".join(lines)).lstrip()
+
+    if not text or not text.strip():
+        return False
+
+    t = _strip_leading_comments(text)
+    if not t:
+        return False
+
+    first_tok = t.split(None, 1)[0].strip("()").upper()
+    SQL_START = {
+        "WITH","SELECT","INSERT","UPDATE","DELETE","MERGE","REPLACE",
+        "CREATE","ALTER","DROP","TRUNCATE","GRANT","REVOKE",
+        "ANALYZE","EXPLAIN","VACUUM","CALL","DO"
+    }
+    return first_tok in SQL_START
 
 def main():
     """Test your DatabaseAgent class."""
@@ -708,6 +770,16 @@ def main():
     # Test the gold query
     with open('example_task_1_gold_query.sql', 'r') as f:
         gold_query = f.read()
+    if not is_sql_query(gold_query):
+        print("="*80)
+        print("REQUEST REJECTED")
+        print("="*80)
+        print("\nThe gold query is empty or commented out, indicating this request")
+        print("should be REJECTED due to business rule violations.")
+        print("\nNo query execution performed.")
+        agent.conn.close()
+        print("\n" + "="*80)
+        return
     cursor = agent.conn.cursor()
     cursor.execute(gold_query)
 
