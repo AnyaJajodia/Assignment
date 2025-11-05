@@ -706,10 +706,9 @@ Respond ONLY in JSON:
 {{"is_sql_query": true/false}}
 """
 
-    # Try LLM if provided
     if llm_call is not None:
         try:
-            content = llm_call(prompt)  # should return raw text
+            content = llm_call(prompt)
             m = re.search(r'\{.*\}', content, re.DOTALL)
             if m:
                 parsed = json.loads(m.group())
